@@ -1,5 +1,5 @@
 from pyFAI.detectors import Detector
-from LCLSGeom.calib import get_pyFAI_detname
+from LCLSGeom.utils.calibmap import get_pyFAI_detname
 
 class Rayonix(Detector):
     """

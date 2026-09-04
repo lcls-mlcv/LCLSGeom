@@ -27,8 +27,8 @@ classifiers = [
 Homepage = "https://github.com/LouConreux/LCLSGeom"
 
 [project.scripts]
-lcls-convert = "LCLSGeom.convert:main"
-lcls-push-db = "LCLSGeom.push_to_database:main"
+lcls-convert = "LCLSGeom.scripts.convert:main"
+lcls-push-db = "LCLSGeom.scripts.push_to_database:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -38,5 +38,5 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["LCLSGeom"]
+include = ["LCLSGeom", "LCLSGeom.*"]
 namespaces = false

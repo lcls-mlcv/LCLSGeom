@@ -1,6 +1,10 @@
+"""
+Formatting utilities for LCLS geometry files.
+"""
+
 import getpass
 from time import strftime, localtime
-from LCLSGeom.calib import detname_to_groups, detname_to_quadrants
+from LCLSGeom.utils.calibmap import detname_to_groups, detname_to_quadrants
 
 def str_to_int_or_float(s):
     """

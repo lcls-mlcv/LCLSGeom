@@ -18,10 +18,10 @@ from math import atan2, degrees
 import pyFAI
 from LCLSGeom.manager import get_default_geometry
 from LCLSGeom.detector import get_detector
-from LCLSGeom.calib import detname_to_pars, psana_to_pyFAI_detname
-from LCLSGeom.utils import str_is_segment_and_asic, sfields_to_xyz_vector, header_psana, header_crystfel, tailer_crystfel
-from LCLSGeom.frame import image_to_pyfai, pyfai_to_image
-from LCLSGeom.geometry import correct_geometry, angle_and_tilt, tilt_xy
+from LCLSGeom.utils.calibmap import detname_to_pars, psana_to_pyFAI_detname
+from LCLSGeom.utils.formatting import str_is_segment_and_asic, sfields_to_xyz_vector, header_psana, header_crystfel, tailer_crystfel
+from LCLSGeom.utils.frame import image_to_pyfai, pyfai_to_image
+from LCLSGeom.utils.geomcalc import correct_geometry, angle_and_tilt, tilt_xy
 pyFAI.use_opencl = False
 
 class PsanaToCrystFEL:

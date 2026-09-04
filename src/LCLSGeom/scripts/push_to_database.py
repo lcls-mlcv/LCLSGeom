@@ -1,5 +1,6 @@
 """
-Command line tool to push calibration constants to the calibration database. This is a wrapper around the psana tools, and is meant to be used in a containerized environment where psana is available. It provides a simple interface for pushing constants without needing to interact with the psana tools directly.
+Command line tool to push calibration constants to the calibration database. 
+This is a wrapper around the psana tools, and is meant to be used in a containerized environment where psana is available.
 """
 
 import sys

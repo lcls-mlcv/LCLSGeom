@@ -1,6 +1,5 @@
 """
-This module provides functions to determine the appropriate calibration group and source string for a given LCLS-I detector and hutch.
-It also includes mappings between detector names, calibration groups, and hutches/stations.
+Calibration group and parameter mappings for LCLS detectors.
 """
 
 import os

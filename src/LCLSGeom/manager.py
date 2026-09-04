@@ -27,7 +27,7 @@ import re
 import tempfile
 from typing import Optional
 
-from LCLSGeom.calib import group_from_detname, source_from_detname, select_calib_file, get_full_detname
+from LCLSGeom.utils.calibmap import group_from_detname, source_from_detname, select_calib_file, get_full_detname
 
 from logging import getLogger
 
