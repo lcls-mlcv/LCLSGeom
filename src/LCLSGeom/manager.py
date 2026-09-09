@@ -212,7 +212,7 @@ def check_calibration_directory(exp: str, run: int, detname: str) -> Optional[st
         Run number
     detname : str
         Name of the detector
-    
+
     Returns
     -------
     in_file : str
@@ -222,7 +222,7 @@ def check_calibration_directory(exp: str, run: int, detname: str) -> Optional[st
     src = source_from_detname(detname, exp[:3])
     group = group_from_detname(detname)
     ctype = "geometry"
-    calib_dir = os.path.join(cdir, src, group, ctype)
+    calib_dir = os.path.join(cdir, group, src, ctype)
     in_file = select_calib_file(calib_dir, run)
     return in_file
 
