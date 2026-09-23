@@ -123,15 +123,20 @@ cd LCLSGeom
 pip install -e .
 ```
 
-> **Nota Bene:** LCLSGeom depends on `psana` and `PSCalib`, which are not available on PyPI and cannot be installed via `pip`. 
-> A standalone installation is therefore only functional for format conversions (`lcls-convert`). 
-> Features that interact with the calibration database or `psana` (`lcls-push-db`, `get_geometry`) require a `psana1` or `psana2` environment.
+> **Nota Bene:** LCLSGeom depends on `psana` and `PSCalib`, which are not available on PyPI and cannot be installed via `pip`.
+> Reading a `psana` geometry file requires `GeometryAccess`, so **all** conversions — including `lcls-convert` — need a `psana1` or `psana2` environment.
+> A standalone `pip` installation is therefore of limited use on its own.
+> Conversions to `dxtbx` additionally require `dxtbx`, which is conda-only; it is imported lazily, so the rest of the package works without it.
+> The `dxtbx` converters are available in the LCLS `cctbx` builds, which provide `dxtbx` and `psana` together:
+> ```bash
+> source /sdf/group/lcls/ds/tools/cctbx/psana2_setup.sh   # or psana1_setup.sh
+> ```
 
 ### Package Modules
 
 LCLSGeom consists of two modules:
 - _manager_: Handles relations with calibration databases (for LCLS-II detectors) or directories (for LCLS-I detectors).
-- _converter_: Provides quick conversions from one format to another. Available formats are `psana`, `CrystFEL` and `pyFAI`.
+- _converter_: Provides quick conversions from one format to another. Available formats are `psana`, `CrystFEL`, `pyFAI` and `dxtbx`.
 
 #### From Psana Geometry to PyFAI detectors
 
@@ -262,18 +267,76 @@ data_file_2 = "path/to/desired/file.data"
 CrystFELToPsana.convert(geom_file, detname, data_file_2)
 ```
 
+#### From Psana Geometry to dxtbx detectors
+
+Two converters produce `dxtbx` `Detector` models, for the two incompatible conventions used
+downstream. Both work in millimetres, since that is what `dxtbx` expects, whereas `psana`
+reports microns.
+
+| | _PsanaToDXTBX_ | _PsanaToCCTBX_ |
+|---|---|---|
+| Intended consumer | `simtbx.nanoBragg` | `DIALS` / `cctbx.xfel` |
+| Panels | one per ASIC | as `cctbx` does: padded module-level for Jungfrau, per-ASIC otherwise |
+| Jungfrau4M panel count / size | 64 × (256, 256) | 8 × (1030, 514) |
+| Structure | flat, absolute origins | hierarchical, origins local to each module group |
+| Detector placement | zeroed | preserved from the input file |
+| Raw data | usable directly | needs `serialtbx.detector.jungfrau.correct_panel` |
+
+_PsanaToDXTBX_ emits one panel per ASIC, matching the `psana` calibration array one-to-one, so
+raw frames need no padding. All detector placement is zeroed — the camera offsets, the 90°
+rotation of the `psana` convention, and the sample-detector distance — so panel origins hold
+pure metrology and placement is supplied downstream as geometric parameters. Because the total
+distance is then zero, `get_beam_centre()` and `get_ray_intersection()` cannot be evaluated on
+a planar detector; the distance from the input file remains available as `converter.detz_mm`.
+
+_PsanaToCCTBX_ reproduces what `cctbx.xfel` writes, so its output is directly comparable with
+refined `.expt` files. Nothing is zeroed. Jungfrau segments are emitted as single panels padded
+for the double-width pixels at the inter-ASIC boundaries (512×1024 → 514×1030), which means raw
+frames must be passed through `serialtbx.detector.jungfrau.correct_panel` first.
+
+##### Example Usage
+```python
+from LCLSGeom.manager import get_geometry
+from LCLSGeom.converter import PsanaToDXTBX, PsanaToCCTBX
+
+exp = "mfx101591226"
+run = 20
+detname = "jungfrau"
+
+data_file = get_geometry(detname, exp, run)
+
+# Flat, per-ASIC panels for simulation
+detector = PsanaToDXTBX.convert(data_file, detname)
+
+# cctbx-convention hierarchy for DIALS
+detector = PsanaToCCTBX.convert(data_file, detname)
+
+# Or write straight to a dxtbx geometry file
+PsanaToDXTBX.convert_to_file(data_file, detname, "path/to/desired/file.expt")
+```
+
 ### Command-line Interface
 
 LCLSGeom provides two command-line tools.
 
-**`lcls-convert`** converts geometry files between `psana` and `CrystFEL` formats. The conversion direction is inferred automatically from the file extensions (`.data` ↔ `.geom`).
+**`lcls-convert`** converts geometry files between `psana`, `CrystFEL` and `dxtbx` formats. The conversion direction is inferred automatically from the file extensions (`.data` ↔ `.geom`, `.data` → `.json`/`.expt`).
 ```bash
 # psana → CrystFEL
 lcls-convert -i input.data -d epix10k2M -o output.geom
 
 # CrystFEL → psana
 lcls-convert -i input.geom -d jungfrau -o output.data
+
+# psana → dxtbx, flat per-ASIC panels (simtbx.nanoBragg)
+lcls-convert -i input.data -d jungfrau4M -o output.expt
+
+# psana → dxtbx, cctbx-convention hierarchy (DIALS / cctbx.xfel)
+lcls-convert -i input.data -d jungfrau4M -o output.expt --cctbx
 ```
+
+| Argument | Description |
+|---|---|
+| `--cctbx` | For `dxtbx` output, emit the `cctbx` module-level hierarchical geometry instead of flat per-ASIC panels |
 
 **`lcls-push-db`** pushes a geometry file to the LCLS calibration database. This requires a `psana2` environment.
 ```bash
