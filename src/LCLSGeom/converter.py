@@ -1,18 +1,15 @@
 """
-Converter classes to convert between psana .data geometry files, CrystFEL .geom geometry files, and PyFAI Detector models
+Converter classes to convert between psana .data geometry files, CrystFEL .geom geometry files,
+PyFAI Detector models, and dxtbx Detector models
 """
 
-import psana
-if hasattr(psana, "xtc_version"):
-    from psana.pscalib.geometry.GeometryAccess import GeometryAccess
-
-    IS_PSANA2 = True
-else:
-    from PSCalib.GeometryAccess import GeometryAccess
-
-    IS_PSANA2 = False
+try:
+    from psana.pscalib.geometry.GeometryAccess import GeometryAccess  # psana2
+except ImportError:
+    from PSCalib.GeometryAccess import GeometryAccess  # psana1
 
 import os
+import json
 import numpy as np
 from math import atan2, degrees
 import pyFAI
@@ -288,6 +285,396 @@ class PsanaToPyFAI:
                 pixel_corners[ss_portion_slab, fs_portion_slab, :, 1] = xasic
                 pixel_corners[ss_portion_slab, fs_portion_slab, :, 2] = yasic
         return pixel_corners
+
+class PsanaToDXTBX:
+    """
+    Class to convert psana .data geometry files to dxtbx Detector models
+
+    Emits one flat panel per ASIC, with absolute lab-frame origins in millimeters. This is the
+    form consumed by simtbx.nanoBragg: panels map 1:1 onto the psana calibration array, so no
+    pixel padding is required, and inter-ASIC gaps are carried by the panel origins.
+
+    All detector placement is zeroed (the camera node offsets, its 90 degree rotation, and the
+    sample-detector distance), so the panel origins hold pure metrology and every origin has
+    z = 0. Placement is expected to come from geometric parameters applied downstream. Because
+    the total distance is therefore zero, ``get_beam_centre()`` and ``get_ray_intersection()``
+    raise on the returned model; use PsanaToCCTBX if an absolutely placed detector is needed.
+    The distance read from the input file is still available as ``self.detz_mm``.
+
+    Parameters
+    ----------
+    in_file : str
+        Path to the input psana .data geometry file
+    detname : str
+        Detector name in psana (e.g., 'jungfrau4M', 'epix10k2M', etc.)
+    """
+    def __init__(self, in_file, detname):
+        self.geo = GeometryAccess(path=in_file, pbits=0, use_wide_pix_center=False)
+        self.detector = get_detector(detname=detname, shape=self.shape3d())
+        self.detz_mm = None
+
+    @classmethod
+    def convert(cls, in_file, detname):
+        """
+        Class method to convert psana .data geometry file to a dxtbx Detector
+
+        Parameters
+        ----------
+        in_file : str
+            Path to the input psana .data geometry file
+        detname : str
+            Detector name in psana (e.g., 'jungfrau4M', 'epix10k2M', etc.)
+
+        Returns
+        -------
+        detector : dxtbx.model.Detector
+            dxtbx Detector with one flat panel per ASIC, origins in millimeters
+        """
+        from dxtbx.model import DetectorFactory
+
+        converter = cls(in_file, detname)
+        panels = converter.get_panels()
+        detector = DetectorFactory.from_dict({"panels": panels})
+        print(f"Converted psana .data geometry file {in_file} to dxtbx Detector.", flush=True)
+        return detector
+
+    @classmethod
+    def convert_to_file(cls, in_file, detname, out_file):
+        """
+        Class method to convert psana .data geometry file to a dxtbx geometry file
+
+        Parameters
+        ----------
+        in_file : str
+            Path to the input psana .data geometry file
+        detname : str
+            Detector name in psana (e.g., 'jungfrau4M', 'epix10k2M', etc.)
+        out_file : str
+            Path to the output dxtbx .json/.expt geometry file
+        """
+        detector = cls.convert(in_file=in_file, detname=detname)
+        with open(out_file, "w") as f:
+            json.dump(detector.to_dict(), f, indent=2)
+        print(f"Wrote dxtbx geometry file {out_file}.", flush=True)
+        return detector
+
+    def shape3d(self):
+        """
+        Return 3d shape of the arrays as (<number-of-segments>, <rows>, <cols>)
+        """
+        seg = self.geo.get_seg_geo().algo
+        sshape = seg.shape()
+        ssize = seg.size()
+        x,_,_ = self.geo.get_pixel_coords()
+        dsize = x.size
+        return (int(dsize/ssize), sshape[0], sshape[1])
+
+    def zero_placement(self):
+        """
+        Zero the detector placement so that pixel coordinates hold metrology only
+
+        Removes the camera node offsets and the 90 degree rotation of the psana convention,
+        and records the sample-detector distance in millimeters on ``self.detz_mm``.
+
+        Returns
+        -------
+        geometry : GeometryObject
+            The camera node, with its placement zeroed
+        """
+        top = self.geo.get_top_geo()
+        geometry = top.get_list_of_children()[0]
+        self.detz_mm = -geometry.z0 * 1e-3
+        geometry.x0 = 0
+        geometry.y0 = 0
+        geometry.z0 = 0
+        geometry.rot_x = 0
+        geometry.rot_y = 0
+        geometry.rot_z -= 90
+        return geometry
+
+    def get_panels(self):
+        """
+        Build one dxtbx panel dictionary per ASIC
+
+        psana reports pixel centers in microns; dxtbx expects the outer corner of the first
+        pixel in millimeters, so coordinates are scaled by 1e-3 and shifted by half a pixel
+        along both basis vectors.
+
+        Returns
+        -------
+        panels : list of dict
+            Panel dictionaries suitable for ``DetectorFactory.from_dict``
+        """
+        geometry = self.zero_placement()
+        shape = self.shape3d()
+        seg = self.geo.get_seg_geo().algo
+        arows, acols = seg.asic_rows_cols()
+        pix = seg.pixel_scale_size() * 1e-3
+        x, y, z = geometry.get_pixel_coords(do_tilt=True)
+        x.shape = y.shape = z.shape = shape
+        panels = []
+        for n in range(shape[0]):
+            for a, (r0, c0) in enumerate(seg.asic0indices()):
+                vfs = np.array((\
+                    x[n,r0,c0+acols-1] - x[n,r0,c0],\
+                    y[n,r0,c0+acols-1] - y[n,r0,c0],\
+                    z[n,r0,c0+acols-1] - z[n,r0,c0]))
+                vss = np.array((\
+                    x[n,r0+arows-1,c0] - x[n,r0,c0],\
+                    y[n,r0+arows-1,c0] - y[n,r0,c0],\
+                    z[n,r0+arows-1,c0] - z[n,r0,c0]))
+                nfs = vfs / np.linalg.norm(vfs)
+                nss = vss / np.linalg.norm(vss)
+                center = np.array((x[n,r0,c0], y[n,r0,c0], z[n,r0,c0])) * 1e-3
+                origin = center - 0.5 * pix * nfs - 0.5 * pix * nss
+                panels.append({
+                    "name": "ARRAY_D0M%dA%d" % (n, a),
+                    "type": "SENSOR_PAD",
+                    "fast_axis": tuple(nfs),
+                    "slow_axis": tuple(nss),
+                    "origin": tuple(origin),
+                    "raw_image_offset": (0, 0),
+                    "image_size": (acols, arows),
+                    "pixel_size": (pix, pix),
+                    "trusted_range": (-10.0, 2e6),
+                    "thickness": 0.0,
+                    "material": "",
+                    "mu": 0.0,
+                    "identifier": "",
+                    "mask": [],
+                    "gain": 1.0,
+                    "pedestal": 0.0,
+                    "px_mm_strategy": {"type": "SimplePxMmStrategy"},
+                })
+        return panels
+
+class PsanaToCCTBX:
+    """
+    Class to convert psana .data geometry files to cctbx-convention dxtbx Detector models
+
+    Emits the geometry the way cctbx.xfel does, reproducing the structure of refined .expt
+    files: one padded module-level panel per psana segment, arranged in a three level
+    hierarchy (detector -> module groups -> panels) whose local frames compose to the absolute
+    positions. Nothing is zeroed, so the sample-detector distance from the input file is kept.
+
+    Panels are padded to the cctbx pixel layout, which inserts the double-width pixels at the
+    inter-ASIC boundaries (a 512x1024 Jungfrau segment becomes a 514x1030 panel). Raw psana
+    frames must therefore be passed through ``serialtbx.detector.jungfrau.correct_panel``
+    before they can be indexed with this model.
+
+    Parameters
+    ----------
+    in_file : str
+        Path to the input psana .data geometry file
+    detname : str
+        Detector name in psana (e.g., 'jungfrau4M', 'epix10k2M', etc.)
+    """
+    def __init__(self, in_file, detname):
+        self.geo = GeometryAccess(path=in_file, pbits=0, use_wide_pix_center=False)
+        self.detector = get_detector(detname=detname, shape=self.shape3d())
+
+    @classmethod
+    def convert(cls, in_file, detname):
+        """
+        Class method to convert psana .data geometry file to a cctbx-convention dxtbx Detector
+
+        Parameters
+        ----------
+        in_file : str
+            Path to the input psana .data geometry file
+        detname : str
+            Detector name in psana (e.g., 'jungfrau4M', 'epix10k2M', etc.)
+
+        Returns
+        -------
+        detector : dxtbx.model.Detector
+            dxtbx Detector with a cctbx-style hierarchy and padded module-level panels
+        """
+        converter = cls(in_file, detname)
+        detector = converter.build_detector()
+        print(f"Converted psana .data geometry file {in_file} to cctbx dxtbx Detector.", flush=True)
+        return detector
+
+    @classmethod
+    def convert_to_file(cls, in_file, detname, out_file):
+        """
+        Class method to convert psana .data geometry file to a cctbx-convention geometry file
+
+        Parameters
+        ----------
+        in_file : str
+            Path to the input psana .data geometry file
+        detname : str
+            Detector name in psana (e.g., 'jungfrau4M', 'epix10k2M', etc.)
+        out_file : str
+            Path to the output dxtbx .json/.expt geometry file
+        """
+        detector = cls.convert(in_file=in_file, detname=detname)
+        with open(out_file, "w") as f:
+            json.dump(detector.to_dict(), f, indent=2)
+        print(f"Wrote cctbx dxtbx geometry file {out_file}.", flush=True)
+        return detector
+
+    def shape3d(self):
+        """
+        Return 3d shape of the arrays as (<number-of-segments>, <rows>, <cols>)
+        """
+        seg = self.geo.get_seg_geo().algo
+        sshape = seg.shape()
+        ssize = seg.size()
+        x,_,_ = self.geo.get_pixel_coords()
+        dsize = x.size
+        return (int(dsize/ssize), sshape[0], sshape[1])
+
+    def build_detector(self):
+        """
+        Build the dxtbx Detector hierarchy from the psana geometry tree
+
+        Returns
+        -------
+        detector : dxtbx.model.Detector
+            dxtbx Detector with a cctbx-style hierarchy
+        """
+        from dxtbx.model import Detector
+        from scitbx.matrix import col
+        from serialtbx.detector.xtc import basis_from_geo
+        try:
+            from psana.pscalib.geometry.SegGeometryStore import sgs  # psana2
+        except ImportError:
+            from PSCalib.SegGeometryStore import sgs  # psana1
+
+        pix = self.geo.get_pixel_scale_size() * 1e-3
+        detector = Detector()
+        group = detector.hierarchy()
+
+        # Collapse the single-child chain at the top of the tree (e.g. IP -> CAMERA)
+        root = self.geo.get_top_geo()
+        root_basis = basis_from_geo(root)
+        while len(root.get_list_of_children()) == 1:
+            child = root.get_list_of_children()[0]
+            root_basis = root_basis * basis_from_geo(child)
+            root = child
+
+        # The detector sits downstream of the sample, so its origin has negative z
+        translation = root_basis.translation
+        root_basis.translation = col((translation[0], translation[1], -abs(translation[2])))
+        self.set_local_frame(node=group, basis=root_basis)
+        group.set_name("D0")
+
+        for n, module in enumerate(root.get_list_of_children()):
+            subgroup = group.add_group()
+            self.set_local_frame(node=subgroup, basis=basis_from_geo(module))
+            subgroup.set_name("D0M%d" % n)
+
+            seg_geo = sgs.Create(segname=module.oname)
+            xx, yy = seg_geo.get_seg_xy_maps_um()
+            xx = xx * 1e-3
+            yy = yy * 1e-3
+            arows, acols = self.panel_rows_cols(seg_geo)
+            for a, (r0, c0) in enumerate(self.panel0indices(seg_geo)):
+                # cctbx takes the first pixel center directly as the panel origin
+                origin = np.array((xx[r0][c0], yy[r0][c0], 0.0))
+                vfs = np.array((xx[r0][c0+1], yy[r0][c0+1], 0.0)) - origin
+                vss = np.array((xx[r0+1][c0], yy[r0+1][c0], 0.0)) - origin
+                panel = subgroup.add_panel()
+                panel.set_local_frame(
+                    tuple(vfs / np.linalg.norm(vfs)),
+                    tuple(vss / np.linalg.norm(vss)),
+                    tuple(origin),
+                )
+                panel.set_name("ARRAY_D0M%dA%d" % (n, a))
+                panel.set_type("SENSOR_PAD")
+                panel.set_pixel_size((pix, pix))
+                panel.set_image_size((acols, arows))
+                panel.set_trusted_range((-10.0, 2e6))
+        return detector
+
+    def is_padded(self, seg_geo):
+        """
+        Whether the segment spans a whole number of pixels once its wide pixels are counted
+
+        Jungfrau segments have double-width pixels at the inter-ASIC boundaries that span an
+        integral number of pixel pitches, so cctbx represents the whole segment as one padded
+        panel (512x1024 -> 514x1030). Other detectors, such as ePix, have fractional gaps that
+        cannot be padded this way, and cctbx emits one panel per ASIC instead.
+
+        Parameters
+        ----------
+        seg_geo : SegGeometry
+            Segment geometry object from the segment geometry store
+
+        Returns
+        -------
+        padded : bool
+            True if the segment can be represented as a single padded panel
+        """
+        rows, cols = self.padded_rows_cols(seg_geo)
+        return abs(rows - round(rows)) < 1e-6 and abs(cols - round(cols)) < 1e-6
+
+    def padded_rows_cols(self, seg_geo):
+        """
+        Extent of the segment in pixel pitches, counting its wide pixels
+
+        Parameters
+        ----------
+        seg_geo : SegGeometry
+            Segment geometry object from the segment geometry store
+
+        Returns
+        -------
+        rows, cols : float, float
+            Slow and fast extent of the segment, in units of the pixel pitch
+        """
+        xx, yy = seg_geo.get_seg_xy_maps_um()
+        pix = seg_geo.pixel_scale_size()
+        cols = abs(xx[0, -1] - xx[0, 0]) / pix + 1
+        rows = abs(yy[-1, 0] - yy[0, 0]) / pix + 1
+        return rows, cols
+
+    def panel_rows_cols(self, seg_geo):
+        """
+        Shape of a single cctbx panel for this segment
+
+        Returns
+        -------
+        rows, cols : int, int
+            Slow and fast size of the panel, in pixels
+        """
+        if self.is_padded(seg_geo):
+            rows, cols = self.padded_rows_cols(seg_geo)
+            return int(round(rows)), int(round(cols))
+        return seg_geo.asic_rows_cols()
+
+    def panel0indices(self, seg_geo):
+        """
+        Index of the first pixel of each cctbx panel within the segment
+
+        Returns
+        -------
+        indices : tuple
+            One (row, col) pair per panel emitted for this segment
+        """
+        if self.is_padded(seg_geo):
+            return ((0, 0),)
+        return seg_geo.asic0indices()
+
+    def set_local_frame(self, node, basis):
+        """
+        Apply a cctbx basis to a dxtbx hierarchy node as its local frame
+
+        Parameters
+        ----------
+        node : dxtbx.model.Panel or dxtbx.model.DetectorNode
+            Node whose local frame is set
+        basis : serialtbx.detector.basis
+            Basis holding the orientation and translation of the node
+        """
+        from scitbx.matrix import col
+
+        origin = col((basis * col((0, 0, 0, 1)))[0:3])
+        fast = col((basis * col((1, 0, 0, 1)))[0:3]) - origin
+        slow = col((basis * col((0, 1, 0, 1)))[0:3]) - origin
+        node.set_local_frame(fast.elems, slow.elems, origin.elems)
 
 class PyFAIToPsana:
     """
