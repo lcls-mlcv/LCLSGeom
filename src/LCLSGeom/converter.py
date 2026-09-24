@@ -9,7 +9,6 @@ except ImportError:
     from PSCalib.GeometryAccess import GeometryAccess  # psana1
 
 import os
-import json
 import numpy as np
 from math import atan2, degrees
 import pyFAI
@@ -20,6 +19,43 @@ from LCLSGeom.utils.formatting import str_is_segment_and_asic, sfields_to_xyz_ve
 from LCLSGeom.utils.frame import image_to_pyfai, pyfai_to_image
 from LCLSGeom.utils.geomcalc import correct_geometry, angle_and_tilt, tilt_xy
 pyFAI.use_opencl = False
+
+def check_detname(detname, shape):
+    """
+    Check that a detector name is consistent with the shape of its geometry file
+
+    The dxtbx converters do not need a pyFAI Detector, but the registry is still the
+    authoritative map from a psana detector name to its expected calibration shape, so it is
+    used here to reject a name that disagrees with the file it was passed.
+
+    Parameters
+    ----------
+    detname : str
+        Detector name in psana (e.g., 'jungfrau4M', 'epix10k2M', etc.)
+    shape : tuple
+        Shape of the geometry file as (<number-of-segments>, <rows>, <cols>)
+    """
+    get_detector(detname=detname, shape=shape)
+
+def write_experiment_list(detector, out_file):
+    """
+    Write a dxtbx Detector to a geometry file as a one-experiment ExperimentList
+
+    dxtbx and DIALS read .expt files as an ExperimentList; a bare detector dictionary is not
+    loadable, so the detector is wrapped in a single Experiment before being written.
+
+    Parameters
+    ----------
+    detector : dxtbx.model.Detector
+        Detector to serialize
+    out_file : str
+        Path to the output dxtbx .expt/.json geometry file
+    """
+    from dxtbx.model import Experiment, ExperimentList
+
+    experiments = ExperimentList([Experiment(detector=detector)])
+    experiments.as_file(out_file)
+    print(f"Wrote dxtbx geometry file {out_file}.", flush=True)
 
 class PsanaToCrystFEL:
     """
@@ -276,8 +312,11 @@ class PsanaToPyFAI:
                 xasic = x[p, ss_portion, fs_portion]
                 yasic = y[p, ss_portion, fs_portion]
                 zasic = z[p, ss_portion, fs_portion]
-                corner_ss = np.array([0, 0, 1, 1])
-                corner_fs = np.array([0, 1, 1, 0])
+                # psana reports pixel centers, so the corners sit half a pixel either side of
+                # them. Offsets of 0 and 1 would put corner 0 on the center and shift the whole
+                # grid outward by half a pixel.
+                corner_ss = np.array([-0.5, -0.5, 0.5, 0.5])
+                corner_fs = np.array([-0.5, 0.5, 0.5, -0.5])
                 xasic = xasic[:, :, np.newaxis] + corner_ss * ssx + corner_fs * fsx
                 yasic = yasic[:, :, np.newaxis] + corner_ss * ssy + corner_fs * fsy
                 zasic = zasic[:, :, np.newaxis] + corner_ss * ssz + corner_fs * fsz
@@ -310,7 +349,7 @@ class PsanaToDXTBX:
     """
     def __init__(self, in_file, detname):
         self.geo = GeometryAccess(path=in_file, pbits=0, use_wide_pix_center=False)
-        self.detector = get_detector(detname=detname, shape=self.shape3d())
+        check_detname(detname=detname, shape=self.shape3d())
         self.detz_mm = None
 
     @classmethod
@@ -341,7 +380,7 @@ class PsanaToDXTBX:
     @classmethod
     def convert_to_file(cls, in_file, detname, out_file):
         """
-        Class method to convert psana .data geometry file to a dxtbx geometry file
+        Class method to convert psana .data geometry file to a dxtbx .expt geometry file
 
         Parameters
         ----------
@@ -350,12 +389,10 @@ class PsanaToDXTBX:
         detname : str
             Detector name in psana (e.g., 'jungfrau4M', 'epix10k2M', etc.)
         out_file : str
-            Path to the output dxtbx .json/.expt geometry file
+            Path to the output dxtbx .expt/.json geometry file
         """
         detector = cls.convert(in_file=in_file, detname=detname)
-        with open(out_file, "w") as f:
-            json.dump(detector.to_dict(), f, indent=2)
-        print(f"Wrote dxtbx geometry file {out_file}.", flush=True)
+        write_experiment_list(detector=detector, out_file=out_file)
         return detector
 
     def shape3d(self):
@@ -471,7 +508,7 @@ class PsanaToCCTBX:
     """
     def __init__(self, in_file, detname):
         self.geo = GeometryAccess(path=in_file, pbits=0, use_wide_pix_center=False)
-        self.detector = get_detector(detname=detname, shape=self.shape3d())
+        check_detname(detname=detname, shape=self.shape3d())
 
     @classmethod
     def convert(cls, in_file, detname):
@@ -507,12 +544,10 @@ class PsanaToCCTBX:
         detname : str
             Detector name in psana (e.g., 'jungfrau4M', 'epix10k2M', etc.)
         out_file : str
-            Path to the output dxtbx .json/.expt geometry file
+            Path to the output dxtbx .expt/.json geometry file
         """
         detector = cls.convert(in_file=in_file, detname=detname)
-        with open(out_file, "w") as f:
-            json.dump(detector.to_dict(), f, indent=2)
-        print(f"Wrote cctbx dxtbx geometry file {out_file}.", flush=True)
+        write_experiment_list(detector=detector, out_file=out_file)
         return detector
 
     def shape3d(self):

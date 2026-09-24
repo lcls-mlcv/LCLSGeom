@@ -213,14 +213,12 @@ def test_dxtbx_inter_panel_distances_are_rigid(detname, shape, pixel_um, asics):
 
 
 @pytest.mark.parametrize("detname,shape,pixel_um,asics", DETECTORS)
-def test_dxtbx_offset_from_pyfai_is_half_a_pixel(detname, shape, pixel_um, asics):
+def test_dxtbx_agrees_with_pyfai(detname, shape, pixel_um, asics):
     """
-    Cross-check against the trusted pyFAI converter.
+    Cross-check pixel centers against the pyFAI converter.
 
-    The two disagree by exactly half a pixel along both basis vectors: PsanaToPyFAI builds its
-    corner array by treating the psana pixel center as the pixel's first corner, whereas dxtbx
-    origins are true outer corners. Asserting the offset rather than equality still catches
-    unit and frame errors, while documenting the discrepancy instead of propagating it.
+    Both converters describe the same detector, so their pixel centers must coincide. This
+    catches a unit error as a factor of 1000 and a frame error as a reflection or axis swap.
     """
     detector = PsanaToDXTBX.convert(template(detname), detname)
     pyfai = PsanaToPyFAI.convert(template(detname), detname)
@@ -231,7 +229,7 @@ def test_dxtbx_offset_from_pyfai_is_half_a_pixel(detname, shape, pixel_um, asics
     ss, fs = pyfai.ss_size, pyfai.fs_size
     nasics_slow, nasics_fast = pyfai.asics_shape
 
-    offsets = []
+    errors = []
     for i, panel in enumerate(detector):
         n, a = divmod(i, len(indices))
         arow, acol = a // nasics_fast, a % nasics_fast
@@ -241,10 +239,8 @@ def test_dxtbx_offset_from_pyfai_is_half_a_pixel(detname, shape, pixel_um, asics
             # pyFAI (x, y, z) is the psana image frame as (y, x, -z); see utils.frame
             ref = np.array([yc[row, col], xc[row, col], -zc[row, col]]) * 1e3
             lab = np.array(panel.get_pixel_lab_coord((dc + 0.5, dr + 0.5)))
-            offsets.append(np.linalg.norm(ref[:2] - lab[:2]))
-
-    expected = 0.5 * (pixel_um * 1e-3) * np.sqrt(2.0)
-    assert np.allclose(offsets, expected, atol=1e-4)
+            errors.append(np.linalg.norm(ref[:2] - lab[:2]))
+    assert max(errors) < TOLERANCE_MM
 
 
 @pytest.mark.parametrize("detname,shape,pixel_um,asics", DETECTORS)
@@ -254,12 +250,26 @@ def test_dxtbx_detname_must_match_the_file(detname, shape, pixel_um, asics):
         PsanaToDXTBX.convert(template(detname), "rayonix")
 
 
-def test_dxtbx_convert_to_file(tmp_path):
-    """The file-writing path emits JSON that dxtbx can load back."""
+@pytest.mark.parametrize("converter,panels", [(PsanaToDXTBX, 64), (PsanaToCCTBX, 8)])
+def test_convert_to_file_is_loadable_by_dials(tmp_path, converter, panels):
+    """
+    The written file is a real .expt, i.e. an ExperimentList that DIALS can open.
+
+    A bare detector dictionary is not loadable, so the detector has to be wrapped in an
+    Experiment; this fails with InvalidExperimentListError otherwise.
+    """
+    from dxtbx.model.experiment_list import ExperimentListFactory
+
     out_file = tmp_path / "geometry.expt"
-    PsanaToDXTBX.convert_to_file(template("jungfrau4M"), "jungfrau4M", str(out_file))
-    reloaded = DetectorFactory.from_dict(json.loads(out_file.read_text()))
-    assert len(reloaded) == 64
+    converter.convert_to_file(template("jungfrau4M"), "jungfrau4M", str(out_file))
+
+    written = json.loads(out_file.read_text())
+    assert written["__id__"] == "ExperimentList"
+    assert len(written["experiment"]) == 1
+
+    experiments = ExperimentListFactory.from_json_file(str(out_file), check_format=False)
+    assert len(experiments) == 1
+    assert len(experiments[0].detector) == panels
 
 
 @pytest.mark.parametrize("detname,shape,pixel_um,asics", DETECTORS)
