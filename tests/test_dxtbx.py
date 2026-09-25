@@ -103,6 +103,32 @@ def test_dxtbx_panels_are_per_asic_and_placement_is_zeroed(detname, shape, pixel
     assert np.max(np.abs(z)) < 1.0
 
 
+@pytest.mark.parametrize("detname,shape,pixel_um,asics", DETECTORS)
+def test_dxtbx_lab_frame_keeps_the_placement(detname, shape, pixel_um, asics):
+    """
+    image_frame=False keeps the absolute placement of the input file.
+
+    The panel layout is unchanged; only the placement differs. The detector sits downstream of
+    the sample, so the origins keep psana's negative z, and that is what gives the model a beam
+    center along the beam direction.
+    """
+    lab = PsanaToDXTBX.convert(template(detname), detname, image_frame=False)
+    image = PsanaToDXTBX.convert(template(detname), detname)
+    assert len(lab) == len(image)
+    for panel in lab:
+        assert panel.get_image_size() == image[0].get_image_size()
+
+    # Origins are pixel corners while psana reports centers, so compare the shift between the
+    # two frames rather than the absolute z: the half-pixel offset cancels out of the difference
+    z_lab = np.array([panel.get_origin()[2] for panel in lab])
+    z_image = np.array([panel.get_origin()[2] for panel in image])
+    _, _, z_psana = psana_coords(detname, shape, zeroed=False)
+    assert np.mean(z_lab - z_image) == pytest.approx(np.mean(z_psana), abs=TOLERANCE_MM)
+    assert np.mean(z_lab) < -1.0
+    # The beam travels along -z in this frame, so only that direction hits the panel
+    assert lab[0].get_beam_centre((0, 0, -1)) is not None
+
+
 @pytest.mark.parametrize("detname", [d[0] for d in DETECTORS])
 def test_dxtbx_serialized_origins_are_absolute(detname):
     """

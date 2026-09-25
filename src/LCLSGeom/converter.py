@@ -237,8 +237,7 @@ class PsanaToDXTBX:
     """
     Class to convert psana .data geometry files to flat dxtbx Detector models.
 
-    Use PsanaToCCTBX instead when an absolutely placed detector is needed, or when the consumer
-    expects the cctbx.xfel panel layout and hierarchy.
+    Use PsanaToCCTBX instead when the consumer expects the cctbx.xfel panel layout and hierarchy.
 
     ``convert`` returns the Detector model.
     ``convert_to_file`` writes the same geometry as an .expt file.
@@ -255,7 +254,7 @@ class PsanaToDXTBX:
         check_detname(detname=detname, shape=shape3d(self.geo))
 
     @classmethod
-    def convert(cls, in_file, detname):
+    def convert(cls, in_file, detname, image_frame=True):
         """
         Class method to convert psana .data geometry file to a dxtbx Detector
 
@@ -265,18 +264,20 @@ class PsanaToDXTBX:
             Path to the input psana .data geometry file
         detname : str
             Detector name in psana (e.g., 'jungfrau4M', 'epix10k2M', etc.)
+        image_frame : bool
+            If True, use image frame coordinates; otherwise, use psana laboratory frame coordinates
 
         Returns
         -------
         detector : dxtbx.model.Detector
             dxtbx Detector with one flat panel per ASIC, origins in millimeters
         """
-        detector = cls(in_file, detname).build_detector()
+        detector = cls(in_file, detname).build_detector(image_frame=image_frame)
         print(f"Converted psana .data geometry file {in_file} to dxtbx Detector.", flush=True)
         return detector
 
     @classmethod
-    def convert_to_file(cls, in_file, detname, out_file):
+    def convert_to_file(cls, in_file, detname, out_file, image_frame=True):
         """
         Class method to convert psana .data geometry file to a dxtbx .expt geometry file
 
@@ -288,23 +289,30 @@ class PsanaToDXTBX:
             Detector name in psana (e.g., 'jungfrau4M', 'epix10k2M', etc.)
         out_file : str
             Path to the output dxtbx .expt/.json geometry file
+        image_frame : bool
+            If True, use image frame coordinates; otherwise, use psana laboratory frame coordinates
 
         Returns
         -------
         detector : dxtbx.model.Detector
             The Detector that was written
         """
-        detector = cls.convert(in_file=in_file, detname=detname)
+        detector = cls.convert(in_file=in_file, detname=detname, image_frame=image_frame)
         write_experiment(detector=detector, out_file=out_file)
         return detector
 
-    def build_detector(self):
+    def build_detector(self, image_frame=True):
         """
         Build a flat dxtbx Detector with one panel per ASIC
 
         psana reports pixel centers in microns; dxtbx expects the outer corner of the first
         pixel in millimeters, so coordinates are scaled by 1e-3 and shifted by half a pixel
         along both basis vectors.
+
+        Parameters
+        ----------
+        image_frame : bool
+            If True, use image frame coordinates; otherwise, use psana laboratory frame coordinates
 
         Returns
         -------
@@ -313,7 +321,7 @@ class PsanaToDXTBX:
         """
         from dxtbx.model import Detector
 
-        geometry = get_root_geometry(geo=self.geo)
+        geometry = get_root_geometry(geo=self.geo, image_frame=image_frame)
         shape = shape3d(self.geo)
         seg = self.geo.get_seg_geo().algo
         arows, acols = seg.asic_rows_cols()
@@ -342,8 +350,9 @@ class PsanaToCCTBX:
     Emits the geometry the way cctbx.xfel does, so the result has the structure of a refined
     .expt file: one panel per psana segment, arranged in a three level hierarchy
     (detector -> module groups -> panels) whose local frames compose to the absolute positions.
-    The geometry is kept in the psana laboratory frame, so the sample-detector distance from the
-    input file survives and the model has a usable beam center.
+    The geometry is always kept in the psana laboratory frame, so the sample-detector distance
+    from the input file survives and the model has a usable beam center. There is no image frame
+    option here, unlike PsanaToDXTBX, since a cctbx consumer wants absolute positions.
 
     Panels follow the cctbx pixel layout, which pads each segment over the double-width pixels
     at its inter-ASIC boundaries (a 512x1024 Jungfrau segment becomes a 514x1030 panel). Raw
