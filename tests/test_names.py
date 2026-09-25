@@ -7,9 +7,9 @@ keeping them free of heavy imports.
 
 import pytest
 
-from LCLSGeom.utils.crystfel_utils import panel_groups, tailer_crystfel
+from LCLSGeom.utils.crystfel_utils import panel_groups, panel_names, tailer_crystfel
 from LCLSGeom.utils.detectors import FAMILIES, get_family, get_layout
-from LCLSGeom.utils.pscalib_utils import (get_calib_detname, get_full_detname,
+from LCLSGeom.utils.pscalib_utils import (PSANA_DETECTORS, get_calib_detname, get_full_detname,
                                           group_from_detname, source_from_detname)
 
 # psana detname, family, template stem, calibration source
@@ -57,6 +57,17 @@ def test_source_carries_the_quad_index_once():
 
     with pytest.raises(ValueError):
         source_from_detname("jungfrau4M", "nonesuch")
+
+
+@pytest.mark.parametrize("detname", list(PSANA_DETECTORS))
+def test_panel_names_cover_every_segment(detname):
+    """One CrystFEL panel per psana segment, in segment order."""
+    names = panel_names(detname)
+    if names is None:
+        assert get_family(detname) == "Rayonix"
+        return
+    nsegs, _ = get_layout(get_family(detname))
+    assert names.split(",") == [f"p{n}a0" for n in range(nsegs)]
 
 
 @pytest.mark.parametrize("family", sorted(FAMILIES))

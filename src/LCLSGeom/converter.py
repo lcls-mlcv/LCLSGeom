@@ -94,7 +94,7 @@ class PsanaToCrystFEL:
                 nfs, nss = asic_axes(x[n], y[n], z[n], r0, c0, arows, acols)
                 txt += panel_crystfel(n, a, nfs, nss, x[n,r0,c0], y[n,r0,c0], z[n,r0,c0],
                                       pix_size, arows, acols, srows, nasicsf)
-                txt += tailer_crystfel(detname=pyFAI_detname)
+        txt += tailer_crystfel(detname=pyFAI_detname)
         Path(out_file).write_text(txt)
 
 class PsanaToPyFAI:
@@ -633,7 +633,7 @@ class PyFAIToCrystFEL:
                 nfs, nss = asic_axes(x[n], y[n], z[n], r0, c0, arows, acols)
                 txt += panel_crystfel(n, a, nfs, nss, x[n,r0,c0], y[n,r0,c0], z[n,r0,c0],
                                       pix_size, arows, acols, srows, nasicsf)
-                txt += tailer_crystfel(self.detector.detname)
+        txt += tailer_crystfel(self.detector.detname)
         Path(out_file).write_text(txt)
 
 class CrystFELToPsana:
@@ -768,7 +768,7 @@ class CrystFELToPsana:
             nfs = np.array(dicasic['fs'], dtype=np.float64)
             nss = np.array(dicasic['ss'], dtype=np.float64)
             vfs = nfs*abs(xc0)
-            vss = nfs*abs(yc0)
+            vss = nss*abs(yc0)
             x0pix = dicasic.get('corner_x', 0)
             y0pix = dicasic.get('corner_y', 0)
             z0    = dicasic.get('coffset', 0)

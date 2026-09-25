@@ -27,9 +27,6 @@ def panel_names(detname):
     if family in NO_PANEL_GROUPS:
         return None
     nsegs, _ = get_layout(family)
-    # ponytail: the old hand-written table stopped at 16 panels for the 32-segment Jungfrau16M.
-    # Kept here so this commit is a pure reorganization; fixed in the following commit.
-    nsegs = min(nsegs, 16)
     return ','.join(f'p{n}a0' for n in range(nsegs))
 
 
