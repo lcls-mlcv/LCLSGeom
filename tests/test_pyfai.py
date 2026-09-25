@@ -15,7 +15,7 @@ try:
 except ImportError:
     pytest.skip("psana/PSCalib unavailable", allow_module_level=True)
 
-from LCLSGeom.utils.frame import image_to_pyfai
+from LCLSGeom.utils.pyfai_utils import image_to_pyfai
 
 TEMPLATES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "LCLSGeom", "templates")
 
