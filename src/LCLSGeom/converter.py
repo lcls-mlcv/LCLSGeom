@@ -15,6 +15,9 @@ import numpy as np
 from math import atan2, degrees
 
 from LCLSGeom.manager import get_default_geometry
+from LCLSGeom.utils.detectors import check_detname
+from LCLSGeom.utils.geomcalc import asic_axes
+from LCLSGeom.utils.dxtbx_utils import panel_layout, set_local_frame, write_experiment
 from LCLSGeom.utils.crystfel_utils import (
     header_crystfel,
     panel_names,
@@ -23,13 +26,20 @@ from LCLSGeom.utils.crystfel_utils import (
     str_is_segment_and_asic,
     tailer_crystfel
 )
-from LCLSGeom.utils.detectors import check_detname
-from LCLSGeom.utils.dxtbx_utils import panel_layout, set_local_frame, write_experiment
-from LCLSGeom.utils.geomcalc import asic_axes
-from LCLSGeom.utils.pscalib_utils import (angle_and_tilt, get_root_geometry, header_psana,
-                                          shape3d, tilt_xy)
-from LCLSGeom.utils.pyfai_utils import (correct_geometry, get_pyFAI_detname, image_to_pyfai,
-                                        load_poni, pyfai_to_image)
+from LCLSGeom.utils.pscalib_utils import (
+    angle_and_tilt, 
+    get_root_geometry, 
+    header_psana,
+    shape3d, 
+    tilt_xy,
+)
+from LCLSGeom.utils.pyfai_utils import (
+    correct_geometry, 
+    get_pyFAI_detname, 
+    image_to_pyfai,
+    load_poni, 
+    pyfai_to_image
+)
 
 
 class PsanaToCrystFEL:
