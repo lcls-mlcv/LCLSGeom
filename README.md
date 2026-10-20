@@ -123,15 +123,20 @@ cd LCLSGeom
 pip install -e .
 ```
 
-> **Nota Bene:** LCLSGeom depends on `psana` and `PSCalib`, which are not available on PyPI and cannot be installed via `pip`. 
-> A standalone installation is therefore only functional for format conversions (`lcls-convert`). 
-> Features that interact with the calibration database or `psana` (`lcls-push-db`, `get_geometry`) require a `psana1` or `psana2` environment.
+> **Nota Bene:** LCLSGeom depends on `psana` and `PSCalib`, which are not available on PyPI and cannot be installed via `pip`.
+> Reading a `psana` geometry file requires `GeometryAccess`, so **all** conversions — including `lcls-convert` — need a `psana1` or `psana2` environment.
+> A standalone `pip` installation is therefore of limited use on its own.
+> Conversions to `dxtbx` additionally require `dxtbx`, which is conda-only; it is imported lazily, so the rest of the package works without it. `pyFAI` is likewise imported lazily, so the `dxtbx` and `CrystFEL` converters do not need it.
+> The `dxtbx` converters are available in the LCLS `cctbx` builds, which provide `dxtbx` and `psana` together:
+> ```bash
+> source /sdf/group/lcls/ds/tools/cctbx/psana2_setup.sh   # or psana1_setup.sh
+> ```
 
 ### Package Modules
 
 LCLSGeom consists of two modules:
 - _manager_: Handles relations with calibration databases (for LCLS-II detectors) or directories (for LCLS-I detectors).
-- _converter_: Provides quick conversions from one format to another. Available formats are `psana`, `CrystFEL` and `pyFAI`.
+- _converter_: Provides quick conversions from one format to another. Available formats are `psana`, `CrystFEL`, `pyFAI` and `dxtbx`.
 
 #### From Psana Geometry to PyFAI detectors
 
@@ -262,18 +267,81 @@ data_file_2 = "path/to/desired/file.data"
 CrystFELToPsana.convert(geom_file, detname, data_file_2)
 ```
 
+#### From Psana Geometry to dxtbx detectors
+
+Two converters produce `dxtbx` `Detector` models, for the two incompatible conventions used
+downstream. Both work in millimetres, since that is what `dxtbx` expects, whereas `psana`
+reports microns.
+
+| | _PsanaToDXTBX_ | _PsanaToCCTBX_ |
+|---|---|---|
+| Intended consumer | `simtbx.nanoBragg` | `DIALS` / `cctbx.xfel` |
+| Panels | one per ASIC | as `cctbx` does: padded module-level for Jungfrau, per-ASIC otherwise |
+| Jungfrau4M panel count / size | 64 × (256, 256) | 8 × (1030, 514) |
+| Structure | flat, absolute origins | hierarchical, origins local to each module group |
+| Detector placement | zeroed | preserved from the input file |
+| Raw data | usable directly | needs `serialtbx.detector.jungfrau.correct_panel` |
+| `convert(...)` | `(in_file, detname)` → `Detector` | `(in_file, detname)` → `Detector` |
+| `convert_to_file(...)` | `(in_file, detname, out_file)` → writes `.expt` | `(in_file, detname, out_file)` → writes `.expt` |
+
+_PsanaToDXTBX_ emits one panel per ASIC, matching the `psana` calibration array one-to-one, so
+raw frames need no padding. All detector placement is zeroed — the camera offsets, the 90°
+rotation of the `psana` convention, and the sample-detector distance — so panel origins hold
+pure metrology and placement is supplied downstream as geometric parameters. Because the total
+distance is then zero, `get_beam_centre()` and `get_ray_intersection()` cannot be evaluated on
+a planar detector.
+
+_PsanaToCCTBX_ reproduces what `cctbx.xfel` writes, so its output is directly comparable with
+refined `.expt` files. Nothing is zeroed. Jungfrau segments are emitted as single panels padded
+for the double-width pixels at the inter-ASIC boundaries (512×1024 → 514×1030), which means raw
+frames must be passed through `serialtbx.detector.jungfrau.correct_panel` first.
+
+##### Example Usage
+```python
+from LCLSGeom.manager import get_geometry
+from LCLSGeom.converter import PsanaToDXTBX, PsanaToCCTBX
+
+exp = "mfx101591226"
+run = 20
+detname = "jungfrau"
+
+data_file = get_geometry(detname, exp, run)
+
+# Flat, per-ASIC panels for simulation: returns a dxtbx Detector
+detector = PsanaToDXTBX.convert(data_file, detname)
+
+# ...or write the same geometry to an .expt file
+PsanaToDXTBX.convert_to_file(data_file, detname, "path/to/desired/file.expt")
+
+# cctbx-convention geometry for DIALS: returns a dxtbx Detector
+detector = PsanaToCCTBX.convert(data_file, detname)
+
+# ...or write the same geometry to an .expt file
+PsanaToCCTBX.convert_to_file(data_file, detname, "path/to/desired/file.expt")
+```
+
 ### Command-line Interface
 
 LCLSGeom provides two command-line tools.
 
-**`lcls-convert`** converts geometry files between `psana` and `CrystFEL` formats. The conversion direction is inferred automatically from the file extensions (`.data` ↔ `.geom`).
+**`lcls-convert`** converts geometry files between `psana`, `CrystFEL` and `dxtbx` formats. The conversion direction is inferred automatically from the file extensions (`.data` ↔ `.geom`, `.data` → `.json`/`.expt`).
 ```bash
 # psana → CrystFEL
 lcls-convert -i input.data -d epix10k2M -o output.geom
 
 # CrystFEL → psana
 lcls-convert -i input.geom -d jungfrau -o output.data
+
+# psana → dxtbx, flat per-ASIC panels (simtbx.nanoBragg)
+lcls-convert -i input.data -d jungfrau4M -o output.expt
+
+# psana → dxtbx, cctbx-convention hierarchy (DIALS / cctbx.xfel)
+lcls-convert -i input.data -d jungfrau4M -o output.expt --cctbx
 ```
+
+| Argument | Description |
+|---|---|
+| `--cctbx` | For `dxtbx` output, emit the `cctbx` module-level hierarchical geometry instead of flat per-ASIC panels |
 
 **`lcls-push-db`** pushes a geometry file to the LCLS calibration database. This requires a `psana2` environment.
 ```bash
@@ -293,17 +361,23 @@ The package structure is organized as follows:
 
 ```
 LCLSGeom/
-├── src/LCLSGeom/   # Main Package
-│ ├── init.py       # Package initialization
-│ ├── converter.py  # Conversion Module
-│ ├── manager.py    # I/O File Module
-│ ├── detector.py   # Detector Definitions
-│ ├── geometry.py   # Geometric and Trigonometric Utils
-│ ├── frame.py      # Frame Transformation Utils
-│ ├── calib.py      # Calibration Path Utils
-│ ├── utils.py      # General Utils
-│ ├── convert.py            # Command-line Script for Conversion
-│ ├── push_to_database.py   # Command-line Script for Pushing to Database
+├── src/LCLSGeom/
+│ ├── __init__.py
+│ ├── converter.py            # The converter classes: the public API
+│ ├── manager.py              # Geometry file lookup: calib DB, calib directory, templates
+│ ├── detector.py             # PyFAI Detector subclasses (the only module importing pyFAI eagerly)
+│ ├── utils/
+│ │ ├── __init__.py
+│ │ ├── detectors.py          # Physical detector facts, families, and legal calibration shapes
+│ │ ├── pscalib_utils.py      # psana names, the pscalib geometry tree, and the .data format
+│ │ ├── crystfel_utils.py     # The CrystFEL .geom format and its millepede groups
+│ │ ├── pyfai_utils.py        # PONI loading and correction, pyFAI frame transforms
+│ │ ├── dxtbx_utils.py        # dxtbx/cctbx detector model helpers
+│ │ └── geomcalc.py           # Geometry helpers shared by every converter
+│ ├── scripts/
+│ │ ├── __init__.py
+│ │ ├── convert.py            # Command-line Script for Conversion
+│ │ └── push_to_database.py   # Command-line Script for Pushing to Database
 │ ├── templates/    # Template files for Defaulting Geometries
 │ │ ├── geometry-def-epix10k2M.data
 │ │ ├── geometry-def-epix10kaQuad0.data
@@ -315,7 +389,16 @@ LCLSGeom/
 │ │ ├── geometry-def-jungfrau05M.data
 │ │ ├── geometry-def-jungfrau16M.data
 │ │ └── geometry-def-rayonix.data
+├── tests/
+│ ├── test_pyfai.py           # Needs a psana environment with pyFAI
+│ └── test_dxtbx.py           # Needs a cctbx environment with psana and dxtbx
 ├── LICENSE
 ├── README.md
 └── pyproject.toml # Dependencies and requirements
 ```
+
+Everything under `utils/` is split by the software it speaks to: one module per output format,
+each owning its own detector-name convention, plus `detectors.py` for the facts that belong to
+the hardware rather than to any one program. No module under `utils/` imports `pyFAI`, `dxtbx`
+or `psana` at module level, so the package is importable in a `psana` environment without
+`dxtbx` and in a `cctbx` environment without `pyFAI`.

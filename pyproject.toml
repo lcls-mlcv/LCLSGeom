@@ -40,3 +40,6 @@ package-dir = {"" = "src"}
 where = ["src"]
 include = ["LCLSGeom", "LCLSGeom.*"]
 namespaces = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
