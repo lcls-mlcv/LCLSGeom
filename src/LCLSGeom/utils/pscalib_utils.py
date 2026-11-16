@@ -219,7 +219,7 @@ def unit_vector_pitch_angle_max_ind(u):
         Pitch angle in degrees, and the index of the largest component of the vector
     """
     absu = np.abs(u)
-    imax = np.where(absu == np.amax(absu))[0]
+    imax = int(np.argmax(absu))
     pitch = degrees(atan2(u[2],u[imax]))
     pitch = (pitch+180) if pitch<-90 else (pitch-180) if pitch>90 else pitch
     return pitch, imax
